@@ -1,54 +1,70 @@
 const express = require('express');
-const ffmpeg = require('fluent-ffmpeg');
-const { Readable,  } = require('stream');
+const handbrake = require('handbrake-js');
 const multer = require('multer');
+const fs = require('fs');
+const tmp = require('tmp');
 const cors = require('cors');
+const bodyParser = require('body-parser');
 const app = express();
+//const admin = require('firebase-admin');
+const functions = require('firebase-functions');
+app.use(express.json())
 
 
-
+//admin.initializeApp();
 
 app.use(cors({origin: true}));
-app.use(express.json({limit: "50mb"}));
-app.use(express.urlencoded({limit: "50mb", extended: true}));
+//app.use(bodyParser.text({type: '/'}));
 
+const storage = multer.memoryStorage(); // Use MemoryStorage instead of DiskStorage
 
-
-// Configure multer to store files in memory
-const upload = multer({
-    storage: multer.memoryStorage()
-});
-
-
-
+const upload = multer({ storage, limits: {
+  fileSize: 5 * 1024 * 1024, // Maximum file size (in bytes) allowed (e.g., 5MB)
+}, });
 
 app.post('/', upload.single('video'), (req, res) => {
-  let fileBody = req.file;
-  console.log(fileBody);
-  const videoBuffer = fileBody.buffer;
-  const readable = new Readable();
-  readable._read = () => {}; // _read is required but you can noop it
-  readable.push(videoBuffer);
-  readable.push(null);
+  const videoFile = req.file;
 
-  // Begin the ffmpeg child process
-  const ffmpegProcess = ffmpeg(readable)
-  .inputFormat('webm')
-  .outputFormat('mp4')
-  .size('640x480')  // Add this line to resize the video
-  .videoBitrate('512k')
-  .outputOptions('-movflags frag_keyframe+empty_moov')
-  .on('error', (error) => {
-      console.error(error);
-      res.status(500).send('An error occurred during conversion');
-  });
+  // Create temporary files for input and output
+  const inputTempFilePath = tmp.tmpNameSync({ postfix: '.webm' }); // adjust according to input format
+  const outputTempFilePath = tmp.tmpNameSync({ postfix: '.mp4' });
 
-// Pipe the output of ffmpeg to res
-res.setHeader('Content-Type', 'video/mp4');
-// this prompts the client to download the file as output.mp4
-ffmpegProcess.pipe(res, { end: true });
+  // Write the uploaded file to the input temporary file
+  fs.writeFileSync(inputTempFilePath, videoFile.buffer);
+
+  const options = {
+    input: inputTempFilePath,
+    output: outputTempFilePath,
+    width: 640, // specify your desired width
+    height: 480, // specify your desired height
+  };
+
+  handbrake.spawn(options)
+    .on('error', err => {
+      console.error('Video conversion error:', err);
+      res.status(500).send('An error occurred during video conversion.');
+    })
+    .on('end', () => {
+      const convertedVideo = fs.readFileSync(outputTempFilePath);
+      res.set('Content-Type', 'video/mp4');
+      res.set('Content-Length', convertedVideo.length);
+      res.send(convertedVideo);
+
+      // Clean up temporary files
+      fs.unlinkSync(inputTempFilePath);
+      fs.unlinkSync(outputTempFilePath);
+    });
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server started on port ${PORT}`));
 
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+
+// const runtimeOpts = {
+//   timeoutSeconds: 540,
+//   memory: '1GB'
+// }
+
+// exports.convertvideo = functions.runWith(runtimeOpts).https.onRequest(app);
